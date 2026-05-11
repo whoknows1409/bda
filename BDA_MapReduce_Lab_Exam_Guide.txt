@@ -1,0 +1,807 @@
+================================================================================
+          BDA LAB EXAM - COMPLETE MAPREDUCE GUIDE (HADOOP STREAMING - PYTHON)
+================================================================================
+
+IMPORTANT NOTES:
+- All programs use Python with Hadoop Streaming
+- Hadoop must be running before executing any job
+- Each program has: Dataset format, mapper.py, reducer.py, run command
+- Adjust file paths as per your system
+
+================================================================================
+                        SECTION 0: HADOOP STARTUP COMMANDS
+================================================================================
+
+# Start Hadoop (run these first in every exam)
+start-dfs.sh
+start-yarn.sh
+
+# Verify all services are running
+jps
+# Should show: NameNode, DataNode, ResourceManager, NodeManager, SecondaryNameNode
+
+# Check HDFS is working
+hdfs dfs -ls /
+
+# Create a working directory on HDFS (do once)
+hdfs dfs -mkdir /user
+hdfs dfs -mkdir /user/hdoop          # or your username
+hdfs dfs -mkdir /input
+
+================================================================================
+                   PROGRAM 1: WORD COUNT
+================================================================================
+
+DATASET (wordcount_input.txt):
+-------------------------------
+Hello World Hello Hadoop
+World is beautiful
+Hadoop is powerful
+Hello World
+
+-------------------------------
+MAPPER: mapper_wc.py
+-------------------------------
+#!/usr/bin/env python3
+import sys
+
+for line in sys.stdin:
+    line = line.strip()
+    words = line.split()
+    for word in words:
+        print(f"{word}\t1")
+
+-------------------------------
+REDUCER: reducer_wc.py
+-------------------------------
+#!/usr/bin/env python3
+import sys
+
+current_word = None
+current_count = 0
+
+for line in sys.stdin:
+    line = line.strip()
+    word, count = line.split('\t', 1)
+    count = int(count)
+
+    if current_word == word:
+        current_count += count
+    else:
+        if current_word is not None:
+            print(f"{current_word}\t{current_count}")
+        current_word = word
+        current_count = count
+
+if current_word is not None:
+    print(f"{current_word}\t{current_count}")
+
+-------------------------------
+STEPS TO RUN:
+-------------------------------
+# 1. Create input file
+nano wordcount_input.txt
+# (type the dataset content, save with Ctrl+O, exit with Ctrl+X)
+
+# 2. Give execute permissions
+chmod +x mapper_wc.py reducer_wc.py
+
+# 3. Copy input to HDFS
+hdfs dfs -mkdir /input/wordcount
+hdfs dfs -put wordcount_input.txt /input/wordcount/
+
+# 4. Run MapReduce job
+hadoop jar /usr/local/hadoop/share/hadoop/tools/lib/hadoop-streaming-*.jar \
+  -input /input/wordcount/wordcount_input.txt \
+  -output /output/wordcount \
+  -mapper mapper_wc.py \
+  -reducer reducer_wc.py \
+  -file mapper_wc.py \
+  -file reducer_wc.py
+
+# 5. View output
+hdfs dfs -cat /output/wordcount/part-00000
+
+# 6. Remove output before re-running (if needed)
+hdfs dfs -rm -r /output/wordcount
+
+-------------------------------
+EXPECTED OUTPUT:
+-------------------------------
+Hadoop    2
+Hello     3
+World     3
+beautiful 1
+is        2
+powerful  1
+
+================================================================================
+                   PROGRAM 2: SALES DATA ANALYSIS (Total Sales per Product)
+================================================================================
+
+DATASET (sales_input.txt):
+-------------------------------
+ProductA  200
+ProductB  150
+ProductA  300
+ProductC  100
+ProductB  250
+ProductC  400
+ProductA  100
+
+Format: ProductName<TAB>SalesAmount
+
+-------------------------------
+MAPPER: mapper_sales.py
+-------------------------------
+#!/usr/bin/env python3
+import sys
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    parts = line.split('\t')
+    if len(parts) == 2:
+        product = parts[0]
+        sales = parts[1]
+        print(f"{product}\t{sales}")
+
+-------------------------------
+REDUCER: reducer_sales.py
+-------------------------------
+#!/usr/bin/env python3
+import sys
+
+current_product = None
+total_sales = 0
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    parts = line.split('\t')
+    if len(parts) != 2:
+        continue
+    product = parts[0]
+    sales = float(parts[1])
+
+    if current_product == product:
+        total_sales += sales
+    else:
+        if current_product is not None:
+            print(f"{current_product}\t{total_sales}")
+        current_product = product
+        total_sales = sales
+
+if current_product is not None:
+    print(f"{current_product}\t{total_sales}")
+
+-------------------------------
+STEPS TO RUN:
+-------------------------------
+chmod +x mapper_sales.py reducer_sales.py
+
+hdfs dfs -mkdir /input/sales
+hdfs dfs -put sales_input.txt /input/sales/
+
+hadoop jar /usr/local/hadoop/share/hadoop/tools/lib/hadoop-streaming-*.jar \
+  -input /input/sales/sales_input.txt \
+  -output /output/sales \
+  -mapper mapper_sales.py \
+  -reducer reducer_sales.py \
+  -file mapper_sales.py \
+  -file reducer_sales.py
+
+hdfs dfs -cat /output/sales/part-00000
+
+-------------------------------
+EXPECTED OUTPUT:
+-------------------------------
+ProductA    600.0
+ProductB    400.0
+ProductC    500.0
+
+================================================================================
+          PROGRAM 3: STUDENT MARKS ANALYSIS (Average Marks per Student)
+================================================================================
+
+DATASET (marks_input.txt):
+-------------------------------
+Alice   85
+Bob     90
+Alice   78
+Bob     82
+Alice   92
+Bob     88
+Charlie 70
+Charlie 95
+
+Format: StudentName<TAB>Marks
+
+-------------------------------
+MAPPER: mapper_marks.py
+-------------------------------
+#!/usr/bin/env python3
+import sys
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    parts = line.split('\t')
+    if len(parts) == 2:
+        student = parts[0]
+        marks = parts[1]
+        print(f"{student}\t{marks}")
+
+-------------------------------
+REDUCER: reducer_marks.py
+-------------------------------
+#!/usr/bin/env python3
+import sys
+
+current_student = None
+total_marks = 0
+count = 0
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    parts = line.split('\t')
+    if len(parts) != 2:
+        continue
+    student = parts[0]
+    marks = float(parts[1])
+
+    if current_student == student:
+        total_marks += marks
+        count += 1
+    else:
+        if current_student is not None:
+            avg = total_marks / count
+            print(f"{current_student}\tTotal:{total_marks}\tAverage:{avg:.2f}")
+        current_student = student
+        total_marks = marks
+        count = 1
+
+if current_student is not None:
+    avg = total_marks / count
+    print(f"{current_student}\tTotal:{total_marks}\tAverage:{avg:.2f}")
+
+-------------------------------
+STEPS TO RUN:
+-------------------------------
+chmod +x mapper_marks.py reducer_marks.py
+
+hdfs dfs -mkdir /input/marks
+hdfs dfs -put marks_input.txt /input/marks/
+
+hadoop jar /usr/local/hadoop/share/hadoop/tools/lib/hadoop-streaming-*.jar \
+  -input /input/marks/marks_input.txt \
+  -output /output/marks \
+  -mapper mapper_marks.py \
+  -reducer reducer_marks.py \
+  -file mapper_marks.py \
+  -file reducer_marks.py
+
+hdfs dfs -cat /output/marks/part-00000
+
+-------------------------------
+EXPECTED OUTPUT:
+-------------------------------
+Alice    Total:255.0   Average:85.00
+Bob      Total:260.0   Average:86.67
+Charlie  Total:165.0   Average:82.50
+
+================================================================================
+          PROGRAM 4: TEMPERATURE ANALYSIS (Max & Min Temp per Year/Station)
+================================================================================
+
+DATASET (temp_input.txt):
+-------------------------------
+2020    45
+2020    38
+2021    40
+2021    42
+2020    50
+2021    35
+2022    48
+2022    55
+
+Format: Year<TAB>Temperature
+
+-------------------------------
+MAPPER: mapper_temp.py
+-------------------------------
+#!/usr/bin/env python3
+import sys
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    parts = line.split('\t')
+    if len(parts) == 2:
+        year = parts[0]
+        temp = parts[1]
+        print(f"{year}\t{temp}")
+
+-------------------------------
+REDUCER: reducer_temp.py
+-------------------------------
+#!/usr/bin/env python3
+import sys
+
+current_year = None
+max_temp = float('-inf')
+min_temp = float('inf')
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    parts = line.split('\t')
+    if len(parts) != 2:
+        continue
+    year = parts[0]
+    temp = float(parts[1])
+
+    if current_year == year:
+        if temp > max_temp:
+            max_temp = temp
+        if temp < min_temp:
+            min_temp = temp
+    else:
+        if current_year is not None:
+            print(f"{current_year}\tMaxTemp:{max_temp}\tMinTemp:{min_temp}")
+        current_year = year
+        max_temp = temp
+        min_temp = temp
+
+if current_year is not None:
+    print(f"{current_year}\tMaxTemp:{max_temp}\tMinTemp:{min_temp}")
+
+-------------------------------
+STEPS TO RUN:
+-------------------------------
+chmod +x mapper_temp.py reducer_temp.py
+
+hdfs dfs -mkdir /input/temp
+hdfs dfs -put temp_input.txt /input/temp/
+
+hadoop jar /usr/local/hadoop/share/hadoop/tools/lib/hadoop-streaming-*.jar \
+  -input /input/temp/temp_input.txt \
+  -output /output/temp \
+  -mapper mapper_temp.py \
+  -reducer reducer_temp.py \
+  -file mapper_temp.py \
+  -file reducer_temp.py
+
+hdfs dfs -cat /output/temp/part-00000
+
+-------------------------------
+EXPECTED OUTPUT:
+-------------------------------
+2020    MaxTemp:50.0    MinTemp:38.0
+2021    MaxTemp:42.0    MinTemp:35.0
+2022    MaxTemp:55.0    MinTemp:48.0
+
+================================================================================
+       PROGRAM 5: LOG FILE ANALYSIS (Count of each Log Level)
+================================================================================
+
+DATASET (log_input.txt):
+-------------------------------
+ERROR   Disk failure on node 1
+INFO    System started successfully
+WARN    Low memory warning
+ERROR   Network timeout
+INFO    User logged in
+ERROR   File not found
+INFO    Backup completed
+WARN    CPU usage high
+
+Format: LogLevel<TAB>Message
+
+-------------------------------
+MAPPER: mapper_log.py
+-------------------------------
+#!/usr/bin/env python3
+import sys
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    parts = line.split('\t')
+    if len(parts) >= 1:
+        log_level = parts[0]
+        print(f"{log_level}\t1")
+
+-------------------------------
+REDUCER: reducer_log.py
+-------------------------------
+#!/usr/bin/env python3
+import sys
+
+current_level = None
+current_count = 0
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    parts = line.split('\t')
+    if len(parts) != 2:
+        continue
+    level = parts[0]
+    count = int(parts[1])
+
+    if current_level == level:
+        current_count += count
+    else:
+        if current_level is not None:
+            print(f"{current_level}\t{current_count}")
+        current_level = level
+        current_count = count
+
+if current_level is not None:
+    print(f"{current_level}\t{current_count}")
+
+-------------------------------
+STEPS TO RUN:
+-------------------------------
+chmod +x mapper_log.py reducer_log.py
+
+hdfs dfs -mkdir /input/log
+hdfs dfs -put log_input.txt /input/log/
+
+hadoop jar /usr/local/hadoop/share/hadoop/tools/lib/hadoop-streaming-*.jar \
+  -input /input/log/log_input.txt \
+  -output /output/log \
+  -mapper mapper_log.py \
+  -reducer reducer_log.py \
+  -file mapper_log.py \
+  -file reducer_log.py
+
+hdfs dfs -cat /output/log/part-00000
+
+-------------------------------
+EXPECTED OUTPUT:
+-------------------------------
+ERROR    3
+INFO     3
+WARN     2
+
+================================================================================
+       PROGRAM 6: EMPLOYEE SALARY ANALYSIS (Dept-wise Total & Avg Salary)
+================================================================================
+
+DATASET (employee_input.txt):
+-------------------------------
+HR      Alice   50000
+IT      Bob     70000
+HR      Charlie 55000
+IT      David   80000
+Finance Eve     60000
+Finance Frank   65000
+IT      Grace   75000
+
+Format: Department<TAB>Name<TAB>Salary
+
+-------------------------------
+MAPPER: mapper_emp.py
+-------------------------------
+#!/usr/bin/env python3
+import sys
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    parts = line.split('\t')
+    if len(parts) == 3:
+        department = parts[0]
+        salary = parts[2]
+        print(f"{department}\t{salary}")
+
+-------------------------------
+REDUCER: reducer_emp.py
+-------------------------------
+#!/usr/bin/env python3
+import sys
+
+current_dept = None
+total_salary = 0
+count = 0
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    parts = line.split('\t')
+    if len(parts) != 2:
+        continue
+    dept = parts[0]
+    salary = float(parts[1])
+
+    if current_dept == dept:
+        total_salary += salary
+        count += 1
+    else:
+        if current_dept is not None:
+            avg = total_salary / count
+            print(f"{current_dept}\tEmployees:{count}\tTotalSalary:{total_salary}\tAvgSalary:{avg:.2f}")
+        current_dept = dept
+        total_salary = salary
+        count = 1
+
+if current_dept is not None:
+    avg = total_salary / count
+    print(f"{current_dept}\tEmployees:{count}\tTotalSalary:{total_salary}\tAvgSalary:{avg:.2f}")
+
+-------------------------------
+STEPS TO RUN:
+-------------------------------
+chmod +x mapper_emp.py reducer_emp.py
+
+hdfs dfs -mkdir /input/employee
+hdfs dfs -put employee_input.txt /input/employee/
+
+hadoop jar /usr/local/hadoop/share/hadoop/tools/lib/hadoop-streaming-*.jar \
+  -input /input/employee/employee_input.txt \
+  -output /output/employee \
+  -mapper mapper_emp.py \
+  -reducer reducer_emp.py \
+  -file mapper_emp.py \
+  -file reducer_emp.py
+
+hdfs dfs -cat /output/employee/part-00000
+
+-------------------------------
+EXPECTED OUTPUT:
+-------------------------------
+Finance    Employees:2   TotalSalary:125000.0   AvgSalary:62500.00
+HR         Employees:2   TotalSalary:105000.0   AvgSalary:52500.00
+IT         Employees:3   TotalSalary:225000.0   AvgSalary:75000.00
+
+================================================================================
+     PROGRAM 7: INVERTED INDEX (Which documents contain each word)
+================================================================================
+
+DATASET (doc1.txt):
+-------------------------------
+Hadoop is a framework
+Hadoop processes big data
+
+DATASET (doc2.txt):
+-------------------------------
+MapReduce is a programming model
+Hadoop uses MapReduce
+
+-------------------------------
+MAPPER: mapper_index.py
+-------------------------------
+#!/usr/bin/env python3
+import sys
+import os
+
+# Get filename from environment
+filename = os.environ.get('mapreduce_map_input_file', 'unknown')
+filename = os.path.basename(filename)
+
+for line in sys.stdin:
+    line = line.strip()
+    words = line.split()
+    for word in words:
+        word = word.lower()
+        print(f"{word}\t{filename}")
+
+-------------------------------
+REDUCER: reducer_index.py
+-------------------------------
+#!/usr/bin/env python3
+import sys
+
+current_word = None
+doc_list = []
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    parts = line.split('\t')
+    if len(parts) != 2:
+        continue
+    word = parts[0]
+    doc = parts[1]
+
+    if current_word == word:
+        if doc not in doc_list:
+            doc_list.append(doc)
+    else:
+        if current_word is not None:
+            print(f"{current_word}\t{', '.join(doc_list)}")
+        current_word = word
+        doc_list = [doc]
+
+if current_word is not None:
+    print(f"{current_word}\t{', '.join(doc_list)}")
+
+-------------------------------
+STEPS TO RUN:
+-------------------------------
+chmod +x mapper_index.py reducer_index.py
+
+hdfs dfs -mkdir /input/docs
+hdfs dfs -put doc1.txt /input/docs/
+hdfs dfs -put doc2.txt /input/docs/
+
+hadoop jar /usr/local/hadoop/share/hadoop/tools/lib/hadoop-streaming-*.jar \
+  -input /input/docs/ \
+  -output /output/index \
+  -mapper mapper_index.py \
+  -reducer reducer_index.py \
+  -file mapper_index.py \
+  -file reducer_index.py
+
+hdfs dfs -cat /output/index/part-00000
+
+================================================================================
+              PROGRAM 8: CUSTOM DATASET (Generic Template)
+================================================================================
+
+NOTE: If you get a NEW dataset in exam, adapt this template:
+
+MAPPER TEMPLATE (mapper_custom.py):
+-------------------------------
+#!/usr/bin/env python3
+import sys
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    parts = line.split('\t')       # Change delimiter if needed (e.g., ',' for CSV)
+    
+    # ADAPT BELOW as per dataset columns:
+    key = parts[0]                 # Column to group by (e.g., category, year, name)
+    value = parts[1]               # Column to aggregate (e.g., amount, marks, count)
+    
+    print(f"{key}\t{value}")
+
+-------------------------------
+REDUCER TEMPLATE (reducer_custom.py):
+-------------------------------
+#!/usr/bin/env python3
+import sys
+
+current_key = None
+total = 0
+count = 0
+
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    parts = line.split('\t')
+    if len(parts) != 2:
+        continue
+    key = parts[0]
+    value = float(parts[1])
+
+    if current_key == key:
+        total += value
+        count += 1
+    else:
+        if current_key is not None:
+            # CHOOSE what to output:
+            print(f"{current_key}\tCount:{count}\tTotal:{total}\tAvg:{total/count:.2f}")
+        current_key = key
+        total = value
+        count = 1
+
+if current_key is not None:
+    print(f"{current_key}\tCount:{count}\tTotal:{total}\tAvg:{total/count:.2f}")
+
+================================================================================
+                     UNIVERSAL RUN COMMAND (COPY-PASTE READY)
+================================================================================
+
+# Replace: MAPPER_FILE, REDUCER_FILE, INPUT_FILE, INPUT_DIR, OUTPUT_DIR
+
+hadoop jar /usr/local/hadoop/share/hadoop/tools/lib/hadoop-streaming-*.jar \
+  -input /input/INPUT_DIR/INPUT_FILE \
+  -output /output/OUTPUT_DIR \
+  -mapper MAPPER_FILE.py \
+  -reducer REDUCER_FILE.py \
+  -file MAPPER_FILE.py \
+  -file REDUCER_FILE.py
+
+================================================================================
+                        QUICK REFERENCE - HDFS COMMANDS
+================================================================================
+
+hdfs dfs -ls /                          # List root directory
+hdfs dfs -ls /input/                    # List input directory
+hdfs dfs -mkdir /input/foldername       # Create directory on HDFS
+hdfs dfs -put localfile.txt /input/dir/ # Upload file to HDFS
+hdfs dfs -get /output/dir/part-00000 .  # Download output to local
+hdfs dfs -cat /output/dir/part-00000    # View output directly
+hdfs dfs -rm -r /output/dirname         # Delete output (before re-run)
+hdfs dfs -rm /input/dir/filename        # Delete a file
+hdfs dfs -copyFromLocal file.txt /dir/  # Same as -put
+
+================================================================================
+                        QUICK REFERENCE - LINUX COMMANDS
+================================================================================
+
+nano filename.py              # Create/edit a file
+cat filename.py               # View file contents
+chmod +x filename.py          # Make file executable
+ls -l                         # List files with permissions
+python3 mapper.py < input.txt # Test mapper locally
+python3 mapper.py < input.txt | sort | python3 reducer.py   # Test full pipeline locally
+
+================================================================================
+                   LOCAL TESTING BEFORE RUNNING ON HADOOP
+================================================================================
+
+# Always test your code locally first!
+
+# Test mapper only:
+python3 mapper_wc.py < wordcount_input.txt
+
+# Test full pipeline (mapper + sort + reducer):
+python3 mapper_wc.py < wordcount_input.txt | sort | python3 reducer_wc.py
+
+# This simulates what Hadoop does internally
+
+================================================================================
+                         COMMON ERRORS & FIXES
+================================================================================
+
+ERROR: Output directory already exists
+FIX:   hdfs dfs -rm -r /output/dirname
+
+ERROR: Permission denied on mapper/reducer
+FIX:   chmod +x mapper.py reducer.py
+
+ERROR: Cannot find hadoop-streaming jar
+FIX:   find /usr/local/hadoop -name "hadoop-streaming*.jar"
+       Then use that full path in the hadoop jar command
+
+ERROR: Python not found
+FIX:   which python3   (use the full path in -mapper flag)
+       -mapper /usr/bin/python3 mapper.py
+
+ERROR: jps shows nothing / Hadoop not running
+FIX:   stop-all.sh
+       start-dfs.sh
+       start-yarn.sh
+       jps
+
+ERROR: Tab vs Space in dataset
+FIX:   Use \t explicitly. In nano: press Ctrl+V then Tab to insert real tab
+
+================================================================================
+                              EXAM DAY CHECKLIST
+================================================================================
+
+[ ] 1. Start Hadoop: start-dfs.sh && start-yarn.sh
+[ ] 2. Verify with: jps (should show 5 services)
+[ ] 3. Create dataset file with nano
+[ ] 4. Write mapper.py with nano
+[ ] 5. Write reducer.py with nano
+[ ] 6. chmod +x mapper.py reducer.py
+[ ] 7. Test locally: python3 mapper.py < dataset.txt | sort | python3 reducer.py
+[ ] 8. Create HDFS input dir: hdfs dfs -mkdir /input/dirname
+[ ] 9. Upload data: hdfs dfs -put dataset.txt /input/dirname/
+[10] 10. Run Hadoop job (copy-paste the jar command)
+[11] 11. View output: hdfs dfs -cat /output/dirname/part-00000
+
+================================================================================
+                          END OF BDA MAPREDUCE GUIDE
+================================================================================

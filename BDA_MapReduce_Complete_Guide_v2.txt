@@ -1,0 +1,1842 @@
+================================================================================
+      BDA LAB EXAM - HADOOP MapReduce ULTRA COMPLETE GUIDE v2
+   Word Count | Count | Sum | Avg | Max | Min | Selection | Projection
+   Relational Algebra | Join | Union | Intersection | Real-World Insights
+================================================================================
+
+================================================================================
+SECTION 1: START HADOOP & HDFS COMMANDS
+================================================================================
+
+--- Start Hadoop ---
+    start-all.sh
+    jps        <-- Should show: NameNode, DataNode, ResourceManager, NodeManager
+
+--- Stop Hadoop ---
+    stop-all.sh
+
+--- HDFS Commands ---
+    hdfs dfs -mkdir /input
+    hdfs dfs -mkdir /input2
+    hdfs dfs -put dataset.txt /input/
+    hdfs dfs -ls /input/
+    hdfs dfs -cat /input/dataset.txt
+    hdfs dfs -cat /output/part-r-00000
+    hdfs dfs -rm -r /output
+    hdfs dfs -get /output/part-r-00000 ~/result.txt
+
+--- Fix: Output directory exists error ---
+    hdfs dfs -rm -r /output
+
+--- Fix: Safe mode error ---
+    hdfs dfsadmin -safemode leave
+
+
+================================================================================
+SECTION 2: UNIVERSAL COMPILE & RUN (Same for ALL programs)
+================================================================================
+
+    mkdir -p ~/exam/com/mapreduce
+    cd ~/exam
+
+    # Write your Java file inside com/mapreduce/
+
+    export HADOOP_CLASSPATH=$(hadoop classpath)
+    javac -classpath $HADOOP_CLASSPATH -d . com/mapreduce/YourFile.java
+    jar -cvf program.jar com/
+
+    hdfs dfs -mkdir /input
+    hdfs dfs -put dataset.txt /input/
+    hdfs dfs -rm -r /output
+
+    hadoop jar program.jar com.mapreduce.YourClassName /input/dataset.txt /output
+    hdfs dfs -cat /output/part-r-00000
+
+    # For programs needing TWO input files (Join, Union, etc.):
+    hdfs dfs -put file1.txt /input/
+    hdfs dfs -put file2.txt /input/
+    hadoop jar program.jar com.mapreduce.YourClass /input /output
+
+
+================================================================================
+SECTION 3: KEY IMPORTS (Paste at top of every program)
+================================================================================
+
+    import java.io.IOException;
+    import java.util.StringTokenizer;
+    import org.apache.hadoop.conf.Configuration;
+    import org.apache.hadoop.fs.Path;
+    import org.apache.hadoop.io.IntWritable;
+    import org.apache.hadoop.io.LongWritable;
+    import org.apache.hadoop.io.DoubleWritable;
+    import org.apache.hadoop.io.Text;
+    import org.apache.hadoop.io.NullWritable;
+    import org.apache.hadoop.mapreduce.Job;
+    import org.apache.hadoop.mapreduce.Mapper;
+    import org.apache.hadoop.mapreduce.Reducer;
+    import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+    import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+
+
+================================================================================
+SECTION 4: DATA TYPES QUICK REFERENCE
+================================================================================
+
+    Java Type    Hadoop Writable     Use Case
+    ---------    ---------------     --------
+    int          IntWritable         counts, salary, marks, age
+    long         LongWritable        large numbers, file offset (default key)
+    double       DoubleWritable      averages, percentages, decimals
+    String       Text                names, words, categories, labels
+    boolean      BooleanWritable     flags
+    (none)       NullWritable        when output key or value should be empty
+
+
+================================================================================
+SECTION 5: PROGRAM 1 - WORD COUNT
+================================================================================
+
+DATASET (wordcount.txt):
+    Hello World Hello Hadoop
+    Hadoop is great World is beautiful
+    Hello MapReduce Hello World
+
+EXPECTED OUTPUT:
+    Hadoop      2
+    Hello       4
+    MapReduce   1
+    World       3
+    beautiful   1
+    great       1
+    is          2
+
+------------ FILE: com/mapreduce/WordCount.java ------------
+
+package com.mapreduce;
+
+import java.io.IOException;
+import java.util.StringTokenizer;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.IntWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.Reducer;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+
+public class WordCount {
+
+    public static class TokenizerMapper extends Mapper<Object, Text, Text, IntWritable> {
+        private final static IntWritable one = new IntWritable(1);
+        private Text word = new Text();
+
+        public void map(Object key, Text value, Context context)
+                throws IOException, InterruptedException {
+            StringTokenizer itr = new StringTokenizer(value.toString());
+            while (itr.hasMoreTokens()) {
+                word.set(itr.nextToken());
+                context.write(word, one);
+            }
+        }
+    }
+
+    public static class IntSumReducer extends Reducer<Text, IntWritable, Text, IntWritable> {
+        private IntWritable result = new IntWritable();
+
+        public void reduce(Text key, Iterable<IntWritable> values, Context context)
+                throws IOException, InterruptedException {
+            int sum = 0;
+            for (IntWritable val : values) {
+                sum += val.get();
+            }
+            result.set(sum);
+            context.write(key, result);
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        Configuration conf = new Configuration();
+        Job job = Job.getInstance(conf, "word count");
+        job.setJarByClass(WordCount.class);
+        job.setMapperClass(TokenizerMapper.class);
+        job.setCombinerClass(IntSumReducer.class);
+        job.setReducerClass(IntSumReducer.class);
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(IntWritable.class);
+        FileInputFormat.addInputPath(job, new Path(args[0]));
+        FileOutputFormat.setOutputPath(job, new Path(args[1]));
+        System.exit(job.waitForCompletion(true) ? 0 : 1);
+    }
+}
+
+RUN:
+    javac -classpath $HADOOP_CLASSPATH -d . com/mapreduce/WordCount.java
+    jar -cvf wordcount.jar com/
+    hadoop jar wordcount.jar com.mapreduce.WordCount /input/wordcount.txt /output
+    hdfs dfs -cat /output/part-r-00000
+
+
+================================================================================
+SECTION 6: PROGRAM 2 - COUNT (Count number of records per category)
+================================================================================
+
+DATASET (orders.txt):
+    Electronics Alice 5000
+    Clothing Bob 1200
+    Electronics Charlie 8000
+    Grocery David 500
+    Clothing Eve 2200
+    Electronics Frank 7500
+    Grocery Grace 300
+
+EXPECTED OUTPUT (Number of orders per category):
+    Clothing    2
+    Electronics 3
+    Grocery     2
+
+------------ FILE: com/mapreduce/CountByCategory.java ------------
+
+package com.mapreduce;
+
+import java.io.IOException;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.IntWritable;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.Reducer;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+
+public class CountByCategory {
+
+    public static class CountMapper extends Mapper<LongWritable, Text, Text, IntWritable> {
+        private final static IntWritable one = new IntWritable(1);
+
+        public void map(LongWritable key, Text value, Context context)
+                throws IOException, InterruptedException {
+            String[] parts = value.toString().trim().split("\\s+");
+            if (parts.length >= 1) {
+                context.write(new Text(parts[0]), one);   // parts[0] = category
+            }
+        }
+    }
+
+    public static class CountReducer extends Reducer<Text, IntWritable, Text, IntWritable> {
+        public void reduce(Text key, Iterable<IntWritable> values, Context context)
+                throws IOException, InterruptedException {
+            int count = 0;
+            for (IntWritable val : values) {
+                count += val.get();
+            }
+            context.write(key, new IntWritable(count));
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        Configuration conf = new Configuration();
+        Job job = Job.getInstance(conf, "count by category");
+        job.setJarByClass(CountByCategory.class);
+        job.setMapperClass(CountMapper.class);
+        job.setCombinerClass(CountReducer.class);
+        job.setReducerClass(CountReducer.class);
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(IntWritable.class);
+        FileInputFormat.addInputPath(job, new Path(args[0]));
+        FileOutputFormat.setOutputPath(job, new Path(args[1]));
+        System.exit(job.waitForCompletion(true) ? 0 : 1);
+    }
+}
+
+RUN:
+    javac -classpath $HADOOP_CLASSPATH -d . com/mapreduce/CountByCategory.java
+    jar -cvf count.jar com/
+    hadoop jar count.jar com.mapreduce.CountByCategory /input/orders.txt /output
+    hdfs dfs -cat /output/part-r-00000
+
+
+================================================================================
+SECTION 7: PROGRAM 3 - SUM (Total sales per category)
+================================================================================
+
+DATASET (sales.txt):
+    Electronics 5000
+    Clothing 1200
+    Electronics 8000
+    Grocery 500
+    Clothing 2200
+    Electronics 7500
+    Grocery 300
+
+EXPECTED OUTPUT:
+    Clothing    3400
+    Electronics 20500
+    Grocery     800
+
+------------ FILE: com/mapreduce/SumByCategory.java ------------
+
+package com.mapreduce;
+
+import java.io.IOException;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.IntWritable;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.Reducer;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+
+public class SumByCategory {
+
+    public static class SumMapper extends Mapper<LongWritable, Text, Text, IntWritable> {
+        public void map(LongWritable key, Text value, Context context)
+                throws IOException, InterruptedException {
+            String[] parts = value.toString().trim().split("\\s+");
+            if (parts.length == 2) {
+                context.write(new Text(parts[0]), new IntWritable(Integer.parseInt(parts[1])));
+            }
+        }
+    }
+
+    public static class SumReducer extends Reducer<Text, IntWritable, Text, IntWritable> {
+        public void reduce(Text key, Iterable<IntWritable> values, Context context)
+                throws IOException, InterruptedException {
+            int total = 0;
+            for (IntWritable val : values) {
+                total += val.get();
+            }
+            context.write(key, new IntWritable(total));
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        Configuration conf = new Configuration();
+        Job job = Job.getInstance(conf, "sum by category");
+        job.setJarByClass(SumByCategory.class);
+        job.setMapperClass(SumMapper.class);
+        job.setCombinerClass(SumReducer.class);
+        job.setReducerClass(SumReducer.class);
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(IntWritable.class);
+        FileInputFormat.addInputPath(job, new Path(args[0]));
+        FileOutputFormat.setOutputPath(job, new Path(args[1]));
+        System.exit(job.waitForCompletion(true) ? 0 : 1);
+    }
+}
+
+RUN:
+    javac -classpath $HADOOP_CLASSPATH -d . com/mapreduce/SumByCategory.java
+    jar -cvf sum.jar com/
+    hadoop jar sum.jar com.mapreduce.SumByCategory /input/sales.txt /output
+    hdfs dfs -cat /output/part-r-00000
+
+
+================================================================================
+SECTION 8: PROGRAM 4 - AVERAGE (Avg marks/salary per group)
+================================================================================
+
+DATASET (students.txt):
+    Alice 85
+    Bob 72
+    Alice 90
+    Charlie 65
+    Bob 88
+    Charlie 78
+    Alice 76
+
+EXPECTED OUTPUT:
+    Alice   83.67
+    Bob     80.00
+    Charlie 71.50
+
+------------ FILE: com/mapreduce/AverageMarks.java ------------
+
+package com.mapreduce;
+
+import java.io.IOException;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.Reducer;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+
+public class AverageMarks {
+
+    public static class AvgMapper extends Mapper<LongWritable, Text, Text, Text> {
+        public void map(LongWritable key, Text value, Context context)
+                throws IOException, InterruptedException {
+            String[] parts = value.toString().trim().split("\\s+");
+            if (parts.length == 2) {
+                // Emit: name -> "mark,1"  (so reducer can compute sum and count)
+                context.write(new Text(parts[0]), new Text(parts[1] + ",1"));
+            }
+        }
+    }
+
+    public static class AvgReducer extends Reducer<Text, Text, Text, Text> {
+        public void reduce(Text key, Iterable<Text> values, Context context)
+                throws IOException, InterruptedException {
+            int sum = 0, count = 0;
+            for (Text val : values) {
+                String[] parts = val.toString().split(",");
+                sum += Integer.parseInt(parts[0]);
+                count += Integer.parseInt(parts[1]);
+            }
+            double avg = (double) sum / count;
+            context.write(key, new Text(String.format("%.2f", avg)));
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        Configuration conf = new Configuration();
+        Job job = Job.getInstance(conf, "average marks");
+        job.setJarByClass(AverageMarks.class);
+        job.setMapperClass(AvgMapper.class);
+        job.setReducerClass(AvgReducer.class);
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(Text.class);
+        FileInputFormat.addInputPath(job, new Path(args[0]));
+        FileOutputFormat.setOutputPath(job, new Path(args[1]));
+        System.exit(job.waitForCompletion(true) ? 0 : 1);
+    }
+}
+
+RUN:
+    javac -classpath $HADOOP_CLASSPATH -d . com/mapreduce/AverageMarks.java
+    jar -cvf average.jar com/
+    hadoop jar average.jar com.mapreduce.AverageMarks /input/students.txt /output
+    hdfs dfs -cat /output/part-r-00000
+
+
+================================================================================
+SECTION 9: PROGRAM 5 - MAXIMUM (Max salary / max score per group)
+================================================================================
+
+DATASET (scores.txt):
+    Alice 85
+    Bob 72
+    Alice 90
+    Charlie 65
+    Bob 88
+    Charlie 78
+
+EXPECTED OUTPUT:
+    Alice   90
+    Bob     88
+    Charlie 78
+
+------------ FILE: com/mapreduce/MaxScore.java ------------
+
+package com.mapreduce;
+
+import java.io.IOException;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.IntWritable;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.Reducer;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+
+public class MaxScore {
+
+    public static class MaxMapper extends Mapper<LongWritable, Text, Text, IntWritable> {
+        public void map(LongWritable key, Text value, Context context)
+                throws IOException, InterruptedException {
+            String[] parts = value.toString().trim().split("\\s+");
+            if (parts.length == 2) {
+                context.write(new Text(parts[0]), new IntWritable(Integer.parseInt(parts[1])));
+            }
+        }
+    }
+
+    public static class MaxReducer extends Reducer<Text, IntWritable, Text, IntWritable> {
+        public void reduce(Text key, Iterable<IntWritable> values, Context context)
+                throws IOException, InterruptedException {
+            int max = Integer.MIN_VALUE;
+            for (IntWritable val : values) {
+                if (val.get() > max) max = val.get();
+            }
+            context.write(key, new IntWritable(max));
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        Configuration conf = new Configuration();
+        Job job = Job.getInstance(conf, "max score");
+        job.setJarByClass(MaxScore.class);
+        job.setMapperClass(MaxMapper.class);
+        job.setReducerClass(MaxReducer.class);
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(IntWritable.class);
+        FileInputFormat.addInputPath(job, new Path(args[0]));
+        FileOutputFormat.setOutputPath(job, new Path(args[1]));
+        System.exit(job.waitForCompletion(true) ? 0 : 1);
+    }
+}
+
+RUN:
+    javac -classpath $HADOOP_CLASSPATH -d . com/mapreduce/MaxScore.java
+    jar -cvf max.jar com/
+    hadoop jar max.jar com.mapreduce.MaxScore /input/scores.txt /output
+    hdfs dfs -cat /output/part-r-00000
+
+
+================================================================================
+SECTION 10: PROGRAM 6 - MINIMUM (Min salary / min score per group)
+================================================================================
+
+DATASET: Same as scores.txt above
+
+EXPECTED OUTPUT:
+    Alice   85
+    Bob     72
+    Charlie 65
+
+------------ FILE: com/mapreduce/MinScore.java ------------
+
+package com.mapreduce;
+
+import java.io.IOException;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.IntWritable;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.Reducer;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+
+public class MinScore {
+
+    public static class MinMapper extends Mapper<LongWritable, Text, Text, IntWritable> {
+        public void map(LongWritable key, Text value, Context context)
+                throws IOException, InterruptedException {
+            String[] parts = value.toString().trim().split("\\s+");
+            if (parts.length == 2) {
+                context.write(new Text(parts[0]), new IntWritable(Integer.parseInt(parts[1])));
+            }
+        }
+    }
+
+    public static class MinReducer extends Reducer<Text, IntWritable, Text, IntWritable> {
+        public void reduce(Text key, Iterable<IntWritable> values, Context context)
+                throws IOException, InterruptedException {
+            int min = Integer.MAX_VALUE;
+            for (IntWritable val : values) {
+                if (val.get() < min) min = val.get();
+            }
+            context.write(key, new IntWritable(min));
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        Configuration conf = new Configuration();
+        Job job = Job.getInstance(conf, "min score");
+        job.setJarByClass(MinScore.class);
+        job.setMapperClass(MinMapper.class);
+        job.setReducerClass(MinReducer.class);
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(IntWritable.class);
+        FileInputFormat.addInputPath(job, new Path(args[0]));
+        FileOutputFormat.setOutputPath(job, new Path(args[1]));
+        System.exit(job.waitForCompletion(true) ? 0 : 1);
+    }
+}
+
+RUN:
+    javac -classpath $HADOOP_CLASSPATH -d . com/mapreduce/MinScore.java
+    jar -cvf min.jar com/
+    hadoop jar min.jar com.mapreduce.MinScore /input/scores.txt /output
+    hdfs dfs -cat /output/part-r-00000
+
+
+================================================================================
+SECTION 11: PROGRAM 7 - COMBINED (Count + Sum + Avg + Max + Min in ONE program)
+================================================================================
+
+DATASET (employee.txt):
+    Alice HR 55000
+    Bob IT 75000
+    Charlie HR 60000
+    David IT 80000
+    Eve Finance 70000
+    Frank Finance 65000
+    Grace HR 58000
+
+EXPECTED OUTPUT (Per Department):
+    Finance     Count=2   Sum=135000  Avg=67500.00  Max=70000  Min=65000
+    HR          Count=3   Sum=173000  Avg=57666.67  Max=60000  Min=55000
+    IT          Count=2   Sum=155000  Avg=77500.00  Max=80000  Min=75000
+
+------------ FILE: com/mapreduce/DeptStats.java ------------
+
+package com.mapreduce;
+
+import java.io.IOException;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.Reducer;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+
+public class DeptStats {
+
+    public static class StatsMapper extends Mapper<LongWritable, Text, Text, Text> {
+        public void map(LongWritable key, Text value, Context context)
+                throws IOException, InterruptedException {
+            String[] parts = value.toString().trim().split("\\s+");
+            if (parts.length == 3) {
+                // Key = Department, Value = salary
+                context.write(new Text(parts[1]), new Text(parts[2]));
+            }
+        }
+    }
+
+    public static class StatsReducer extends Reducer<Text, Text, Text, Text> {
+        public void reduce(Text key, Iterable<Text> values, Context context)
+                throws IOException, InterruptedException {
+            int count = 0, sum = 0;
+            int max = Integer.MIN_VALUE, min = Integer.MAX_VALUE;
+            for (Text val : values) {
+                int salary = Integer.parseInt(val.toString());
+                count++;
+                sum += salary;
+                if (salary > max) max = salary;
+                if (salary < min) min = salary;
+            }
+            double avg = (double) sum / count;
+            String result = String.format(
+                "Count=%d  Sum=%d  Avg=%.2f  Max=%d  Min=%d",
+                count, sum, avg, max, min);
+            context.write(key, new Text(result));
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        Configuration conf = new Configuration();
+        Job job = Job.getInstance(conf, "dept stats");
+        job.setJarByClass(DeptStats.class);
+        job.setMapperClass(StatsMapper.class);
+        job.setReducerClass(StatsReducer.class);
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(Text.class);
+        FileInputFormat.addInputPath(job, new Path(args[0]));
+        FileOutputFormat.setOutputPath(job, new Path(args[1]));
+        System.exit(job.waitForCompletion(true) ? 0 : 1);
+    }
+}
+
+RUN:
+    javac -classpath $HADOOP_CLASSPATH -d . com/mapreduce/DeptStats.java
+    jar -cvf deptstats.jar com/
+    hadoop jar deptstats.jar com.mapreduce.DeptStats /input/employee.txt /output
+    hdfs dfs -cat /output/part-r-00000
+
+
+================================================================================
+SECTION 12: PROGRAM 8 - SELECTION (Filter rows matching a condition)
+================================================================================
+
+CONCEPT: Selection = σ(condition)(Table)
+          Keeps only rows that satisfy the given condition.
+          Example: Select employees with salary > 60000
+
+DATASET (employee.txt):
+    Alice HR 55000
+    Bob IT 75000
+    Charlie HR 60000
+    David IT 80000
+    Eve Finance 70000
+    Frank Finance 65000
+
+EXPECTED OUTPUT (Salary > 60000):
+    Bob     IT      75000
+    David   IT      80000
+    Eve     Finance 70000
+    Frank   Finance 65000
+
+------------ FILE: com/mapreduce/Selection.java ------------
+
+package com.mapreduce;
+
+import java.io.IOException;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.NullWritable;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.Reducer;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+
+public class Selection {
+
+    public static class SelectMapper extends Mapper<LongWritable, Text, Text, NullWritable> {
+        public void map(LongWritable key, Text value, Context context)
+                throws IOException, InterruptedException {
+            String line = value.toString().trim();
+            String[] parts = line.split("\\s+");
+            if (parts.length == 3) {
+                int salary = Integer.parseInt(parts[2]);
+                // CONDITION: Select rows where salary > 60000
+                if (salary > 60000) {
+                    context.write(new Text(line), NullWritable.get());
+                }
+            }
+        }
+    }
+
+    // Identity Reducer - just passes through the filtered rows
+    public static class SelectReducer extends Reducer<Text, NullWritable, Text, NullWritable> {
+        public void reduce(Text key, Iterable<NullWritable> values, Context context)
+                throws IOException, InterruptedException {
+            context.write(key, NullWritable.get());
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        Configuration conf = new Configuration();
+        Job job = Job.getInstance(conf, "selection");
+        job.setJarByClass(Selection.class);
+        job.setMapperClass(SelectMapper.class);
+        job.setReducerClass(SelectReducer.class);
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(NullWritable.class);
+        FileInputFormat.addInputPath(job, new Path(args[0]));
+        FileOutputFormat.setOutputPath(job, new Path(args[1]));
+        System.exit(job.waitForCompletion(true) ? 0 : 1);
+    }
+}
+
+NOTE: Change the condition in mapper for different filters:
+    salary < 60000      (less than)
+    salary == 70000     (equals)
+    parts[1].equals("IT")    (filter by department)
+    parts[0].startsWith("A") (filter by name)
+
+RUN:
+    javac -classpath $HADOOP_CLASSPATH -d . com/mapreduce/Selection.java
+    jar -cvf selection.jar com/
+    hadoop jar selection.jar com.mapreduce.Selection /input/employee.txt /output
+    hdfs dfs -cat /output/part-r-00000
+
+
+================================================================================
+SECTION 13: PROGRAM 9 - PROJECTION (Select specific columns only)
+================================================================================
+
+CONCEPT: Projection = π(col1, col2)(Table)
+          Keeps only the specified columns from each row.
+          Example: Project only Name and Salary (drop Department)
+
+DATASET (employee.txt):
+    Alice HR 55000
+    Bob IT 75000
+    Charlie HR 60000
+    David IT 80000
+
+EXPECTED OUTPUT (Only Name and Salary):
+    Alice   55000
+    Bob     75000
+    Charlie 60000
+    David   80000
+
+------------ FILE: com/mapreduce/Projection.java ------------
+
+package com.mapreduce;
+
+import java.io.IOException;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.NullWritable;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.Reducer;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+
+public class Projection {
+
+    public static class ProjectMapper extends Mapper<LongWritable, Text, Text, NullWritable> {
+        public void map(LongWritable key, Text value, Context context)
+                throws IOException, InterruptedException {
+            String[] parts = value.toString().trim().split("\\s+");
+            if (parts.length == 3) {
+                // Project columns 0 (Name) and 2 (Salary) — drop column 1 (Department)
+                String projected = parts[0] + "\t" + parts[2];
+                context.write(new Text(projected), NullWritable.get());
+            }
+        }
+    }
+
+    public static class ProjectReducer extends Reducer<Text, NullWritable, Text, NullWritable> {
+        public void reduce(Text key, Iterable<NullWritable> values, Context context)
+                throws IOException, InterruptedException {
+            context.write(key, NullWritable.get());
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        Configuration conf = new Configuration();
+        Job job = Job.getInstance(conf, "projection");
+        job.setJarByClass(Projection.class);
+        job.setMapperClass(ProjectMapper.class);
+        job.setReducerClass(ProjectReducer.class);
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(NullWritable.class);
+        FileInputFormat.addInputPath(job, new Path(args[0]));
+        FileOutputFormat.setOutputPath(job, new Path(args[1]));
+        System.exit(job.waitForCompletion(true) ? 0 : 1);
+    }
+}
+
+NOTE: Change projection by selecting different parts[] indices:
+    parts[0]                  = only Name
+    parts[0] + "\t" + parts[1] = Name + Department
+    parts[1] + "\t" + parts[2] = Department + Salary
+
+RUN:
+    javac -classpath $HADOOP_CLASSPATH -d . com/mapreduce/Projection.java
+    jar -cvf projection.jar com/
+    hadoop jar projection.jar com.mapreduce.Projection /input/employee.txt /output
+    hdfs dfs -cat /output/part-r-00000
+
+
+================================================================================
+SECTION 14: PROGRAM 10 - UNION (Combine two tables, remove duplicates)
+================================================================================
+
+CONCEPT: Union = R ∪ S
+          Combines all rows from both files. Duplicates are removed.
+
+DATASET file1.txt (Students in Section A):
+    Alice
+    Bob
+    Charlie
+    David
+
+DATASET file2.txt (Students in Section B):
+    Charlie
+    David
+    Eve
+    Frank
+
+EXPECTED OUTPUT (All unique students):
+    Alice
+    Bob
+    Charlie
+    David
+    Eve
+    Frank
+
+------------ FILE: com/mapreduce/Union.java ------------
+
+package com.mapreduce;
+
+import java.io.IOException;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.NullWritable;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.Reducer;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+
+public class Union {
+
+    public static class UnionMapper extends Mapper<LongWritable, Text, Text, NullWritable> {
+        public void map(LongWritable key, Text value, Context context)
+                throws IOException, InterruptedException {
+            String line = value.toString().trim();
+            if (!line.isEmpty()) {
+                context.write(new Text(line), NullWritable.get());
+            }
+        }
+    }
+
+    // Reducer auto-deduplicates because same key comes only once
+    public static class UnionReducer extends Reducer<Text, NullWritable, Text, NullWritable> {
+        public void reduce(Text key, Iterable<NullWritable> values, Context context)
+                throws IOException, InterruptedException {
+            context.write(key, NullWritable.get());
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        Configuration conf = new Configuration();
+        Job job = Job.getInstance(conf, "union");
+        job.setJarByClass(Union.class);
+        job.setMapperClass(UnionMapper.class);
+        job.setReducerClass(UnionReducer.class);
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(NullWritable.class);
+        // Both files loaded from same /input directory
+        FileInputFormat.addInputPath(job, new Path(args[0]));
+        FileOutputFormat.setOutputPath(job, new Path(args[1]));
+        System.exit(job.waitForCompletion(true) ? 0 : 1);
+    }
+}
+
+RUN:
+    hdfs dfs -put file1.txt /input/
+    hdfs dfs -put file2.txt /input/
+    javac -classpath $HADOOP_CLASSPATH -d . com/mapreduce/Union.java
+    jar -cvf union.jar com/
+    hadoop jar union.jar com.mapreduce.Union /input /output
+    hdfs dfs -cat /output/part-r-00000
+
+
+================================================================================
+SECTION 15: PROGRAM 11 - INTERSECTION (Common rows in both tables)
+================================================================================
+
+CONCEPT: Intersection = R ∩ S
+          Returns only rows that appear in BOTH files.
+
+DATASET: Same file1.txt and file2.txt from Union section.
+
+EXPECTED OUTPUT (Students in BOTH sections):
+    Charlie
+    David
+
+------------ FILE: com/mapreduce/Intersection.java ------------
+
+package com.mapreduce;
+
+import java.io.IOException;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.IntWritable;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.Reducer;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+
+public class Intersection {
+
+    public static class IntersectMapper extends Mapper<LongWritable, Text, Text, IntWritable> {
+        private final static IntWritable one = new IntWritable(1);
+
+        public void map(LongWritable key, Text value, Context context)
+                throws IOException, InterruptedException {
+            String line = value.toString().trim();
+            if (!line.isEmpty()) {
+                context.write(new Text(line), one);
+            }
+        }
+    }
+
+    // Emit only if count >= 2 (appeared in both files)
+    public static class IntersectReducer extends Reducer<Text, IntWritable, Text, IntWritable> {
+        public void reduce(Text key, Iterable<IntWritable> values, Context context)
+                throws IOException, InterruptedException {
+            int count = 0;
+            for (IntWritable val : values) {
+                count += val.get();
+            }
+            if (count >= 2) {
+                context.write(key, new IntWritable(count));
+            }
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        Configuration conf = new Configuration();
+        Job job = Job.getInstance(conf, "intersection");
+        job.setJarByClass(Intersection.class);
+        job.setMapperClass(IntersectMapper.class);
+        job.setReducerClass(IntersectReducer.class);
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(IntWritable.class);
+        FileInputFormat.addInputPath(job, new Path(args[0]));
+        FileOutputFormat.setOutputPath(job, new Path(args[1]));
+        System.exit(job.waitForCompletion(true) ? 0 : 1);
+    }
+}
+
+RUN:
+    hadoop jar intersection.jar com.mapreduce.Intersection /input /output
+    hdfs dfs -cat /output/part-r-00000
+
+
+================================================================================
+SECTION 16: PROGRAM 12 - SET DIFFERENCE (Rows in R but NOT in S)
+================================================================================
+
+CONCEPT: Difference = R - S
+          Returns rows that are in file1 but NOT in file2.
+
+DATASET: Same file1.txt and file2.txt
+
+EXPECTED OUTPUT (In Section A but NOT in Section B):
+    Alice
+    Bob
+
+------------ FILE: com/mapreduce/SetDifference.java ------------
+
+package com.mapreduce;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.NullWritable;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.Reducer;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.input.FileSplit;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+
+public class SetDifference {
+
+    // Tag each record with which file it came from
+    public static class DiffMapper extends Mapper<LongWritable, Text, Text, Text> {
+        public void map(LongWritable key, Text value, Context context)
+                throws IOException, InterruptedException {
+            String line = value.toString().trim();
+            if (!line.isEmpty()) {
+                // Get source file name
+                FileSplit fileSplit = (FileSplit) context.getInputSplit();
+                String filename = fileSplit.getPath().getName();
+                // Tag with "1" for file1, "2" for file2
+                if (filename.contains("file1")) {
+                    context.write(new Text(line), new Text("1"));
+                } else {
+                    context.write(new Text(line), new Text("2"));
+                }
+            }
+        }
+    }
+
+    // Emit only if tagged only with "1" (not present in file2)
+    public static class DiffReducer extends Reducer<Text, Text, Text, NullWritable> {
+        public void reduce(Text key, Iterable<Text> values, Context context)
+                throws IOException, InterruptedException {
+            List<String> tags = new ArrayList<>();
+            for (Text val : values) {
+                tags.add(val.toString());
+            }
+            if (tags.contains("1") && !tags.contains("2")) {
+                context.write(key, NullWritable.get());
+            }
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        Configuration conf = new Configuration();
+        Job job = Job.getInstance(conf, "set difference");
+        job.setJarByClass(SetDifference.class);
+        job.setMapperClass(DiffMapper.class);
+        job.setReducerClass(DiffReducer.class);
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(NullWritable.class);
+        FileInputFormat.addInputPath(job, new Path(args[0]));
+        FileOutputFormat.setOutputPath(job, new Path(args[1]));
+        System.exit(job.waitForCompletion(true) ? 0 : 1);
+    }
+}
+
+RUN:
+    hadoop jar setdiff.jar com.mapreduce.SetDifference /input /output
+    hdfs dfs -cat /output/part-r-00000
+
+
+================================================================================
+SECTION 17: PROGRAM 13 - JOIN (Relational Algebra Natural Join)
+================================================================================
+
+CONCEPT: Join = R ⋈ S  (on common key)
+          Combines matching rows from two tables based on a common column.
+
+DATASET file1.txt (Employee: EmpID, Name, DeptID):
+    E01 Alice D01
+    E02 Bob D02
+    E03 Charlie D01
+    E04 David D03
+
+DATASET file2.txt (Department: DeptID, DeptName):
+    D01 HR
+    D02 IT
+    D03 Finance
+
+EXPECTED OUTPUT (Employee + Department Name):
+    D01 Alice HR
+    D01 Charlie HR
+    D02 Bob IT
+    D03 David Finance
+
+------------ FILE: com/mapreduce/NaturalJoin.java ------------
+
+package com.mapreduce;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.Reducer;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.input.FileSplit;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+
+public class NaturalJoin {
+
+    public static class JoinMapper extends Mapper<LongWritable, Text, Text, Text> {
+        public void map(LongWritable key, Text value, Context context)
+                throws IOException, InterruptedException {
+            String line = value.toString().trim();
+            String[] parts = line.split("\\s+");
+            FileSplit fileSplit = (FileSplit) context.getInputSplit();
+            String filename = fileSplit.getPath().getName();
+
+            if (filename.contains("file1") && parts.length == 3) {
+                // Employee file: key=DeptID, value="EMP:Name"
+                context.write(new Text(parts[2]), new Text("EMP:" + parts[1]));
+            } else if (filename.contains("file2") && parts.length == 2) {
+                // Department file: key=DeptID, value="DEPT:DeptName"
+                context.write(new Text(parts[0]), new Text("DEPT:" + parts[1]));
+            }
+        }
+    }
+
+    public static class JoinReducer extends Reducer<Text, Text, Text, Text> {
+        public void reduce(Text key, Iterable<Text> values, Context context)
+                throws IOException, InterruptedException {
+            List<String> empNames = new ArrayList<>();
+            String deptName = "";
+            for (Text val : values) {
+                String v = val.toString();
+                if (v.startsWith("EMP:")) {
+                    empNames.add(v.substring(4));
+                } else if (v.startsWith("DEPT:")) {
+                    deptName = v.substring(5);
+                }
+            }
+            for (String emp : empNames) {
+                context.write(key, new Text(emp + " " + deptName));
+            }
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        Configuration conf = new Configuration();
+        Job job = Job.getInstance(conf, "natural join");
+        job.setJarByClass(NaturalJoin.class);
+        job.setMapperClass(JoinMapper.class);
+        job.setReducerClass(JoinReducer.class);
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(Text.class);
+        FileInputFormat.addInputPath(job, new Path(args[0]));
+        FileOutputFormat.setOutputPath(job, new Path(args[1]));
+        System.exit(job.waitForCompletion(true) ? 0 : 1);
+    }
+}
+
+RUN:
+    hdfs dfs -put file1.txt /input/
+    hdfs dfs -put file2.txt /input/
+    javac -classpath $HADOOP_CLASSPATH -d . com/mapreduce/NaturalJoin.java
+    jar -cvf join.jar com/
+    hadoop jar join.jar com.mapreduce.NaturalJoin /input /output
+    hdfs dfs -cat /output/part-r-00000
+
+
+================================================================================
+SECTION 18: PROGRAM 14 - SELECTION + PROJECTION COMBINED
+================================================================================
+
+CONCEPT: π(Name, Salary) σ(Salary > 60000) (Employee)
+          First filter rows, then project specific columns.
+
+DATASET (employee.txt):
+    Alice HR 55000
+    Bob IT 75000
+    Charlie HR 60000
+    David IT 80000
+    Eve Finance 70000
+
+EXPECTED OUTPUT (Name and Salary only, where Salary > 60000):
+    Bob     75000
+    David   80000
+    Eve     70000
+
+------------ FILE: com/mapreduce/SelectProject.java ------------
+
+package com.mapreduce;
+
+import java.io.IOException;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.NullWritable;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.Reducer;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+
+public class SelectProject {
+
+    public static class SPMapper extends Mapper<LongWritable, Text, Text, NullWritable> {
+        public void map(LongWritable key, Text value, Context context)
+                throws IOException, InterruptedException {
+            String[] parts = value.toString().trim().split("\\s+");
+            if (parts.length == 3) {
+                int salary = Integer.parseInt(parts[2]);
+                // SELECTION: salary > 60000
+                if (salary > 60000) {
+                    // PROJECTION: emit only Name and Salary
+                    String projected = parts[0] + "\t" + parts[2];
+                    context.write(new Text(projected), NullWritable.get());
+                }
+            }
+        }
+    }
+
+    public static class SPReducer extends Reducer<Text, NullWritable, Text, NullWritable> {
+        public void reduce(Text key, Iterable<NullWritable> values, Context context)
+                throws IOException, InterruptedException {
+            context.write(key, NullWritable.get());
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        Configuration conf = new Configuration();
+        Job job = Job.getInstance(conf, "select and project");
+        job.setJarByClass(SelectProject.class);
+        job.setMapperClass(SPMapper.class);
+        job.setReducerClass(SPReducer.class);
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(NullWritable.class);
+        FileInputFormat.addInputPath(job, new Path(args[0]));
+        FileOutputFormat.setOutputPath(job, new Path(args[1]));
+        System.exit(job.waitForCompletion(true) ? 0 : 1);
+    }
+}
+
+RUN:
+    javac -classpath $HADOOP_CLASSPATH -d . com/mapreduce/SelectProject.java
+    jar -cvf selectproject.jar com/
+    hadoop jar selectproject.jar com.mapreduce.SelectProject /input/employee.txt /output
+    hdfs dfs -cat /output/part-r-00000
+
+
+================================================================================
+SECTION 19: PROGRAM 15 - MAX TEMPERATURE (Real-World Weather Dataset)
+================================================================================
+
+DATASET (weather.txt):
+    2023-01-01 Mumbai 35
+    2023-01-02 Delhi 22
+    2023-01-03 Mumbai 37
+    2023-01-04 Delhi 25
+    2023-01-05 Mumbai 33
+    2023-01-06 Delhi 28
+    2023-01-07 Bangalore 29
+
+EXPECTED OUTPUT:
+    Bangalore   29
+    Delhi       28
+    Mumbai      37
+
+------------ FILE: com/mapreduce/MaxTemperature.java ------------
+
+package com.mapreduce;
+
+import java.io.IOException;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.IntWritable;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.Reducer;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+
+public class MaxTemperature {
+
+    public static class TempMapper extends Mapper<LongWritable, Text, Text, IntWritable> {
+        public void map(LongWritable key, Text value, Context context)
+                throws IOException, InterruptedException {
+            String[] parts = value.toString().trim().split("\\s+");
+            if (parts.length == 3) {
+                context.write(new Text(parts[1]), new IntWritable(Integer.parseInt(parts[2])));
+            }
+        }
+    }
+
+    public static class TempReducer extends Reducer<Text, IntWritable, Text, IntWritable> {
+        public void reduce(Text key, Iterable<IntWritable> values, Context context)
+                throws IOException, InterruptedException {
+            int max = Integer.MIN_VALUE;
+            for (IntWritable val : values) {
+                if (val.get() > max) max = val.get();
+            }
+            context.write(key, new IntWritable(max));
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        Configuration conf = new Configuration();
+        Job job = Job.getInstance(conf, "max temperature");
+        job.setJarByClass(MaxTemperature.class);
+        job.setMapperClass(TempMapper.class);
+        job.setReducerClass(TempReducer.class);
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(IntWritable.class);
+        FileInputFormat.addInputPath(job, new Path(args[0]));
+        FileOutputFormat.setOutputPath(job, new Path(args[1]));
+        System.exit(job.waitForCompletion(true) ? 0 : 1);
+    }
+}
+
+RUN:
+    hadoop jar maxtemp.jar com.mapreduce.MaxTemperature /input/weather.txt /output
+    hdfs dfs -cat /output/part-r-00000
+
+
+================================================================================
+SECTION 20: PROGRAM 16 - REAL-WORLD E-COMMERCE INSIGHTS
+================================================================================
+
+DATASET (ecommerce.txt):
+    OrderID  CustomerID  Category     Amount  City
+    1001     C01         Electronics  15000   Mumbai
+    1002     C02         Clothing     2500    Delhi
+    1003     C01         Grocery      800     Mumbai
+    1004     C03         Electronics  22000   Bangalore
+    1005     C02         Electronics  18000   Delhi
+    1006     C03         Clothing     3500    Bangalore
+    1007     C01         Electronics  9000    Mumbai
+
+FORMAT (space-separated, no header):
+    1001 C01 Electronics 15000 Mumbai
+    1002 C02 Clothing 2500 Delhi
+    1003 C01 Grocery 800 Mumbai
+    1004 C03 Electronics 22000 Bangalore
+    1005 C02 Electronics 18000 Delhi
+    1006 C03 Clothing 3500 Bangalore
+    1007 C01 Electronics 9000 Mumbai
+
+--- 16A: Total Revenue per Category ---
+
+EXPECTED OUTPUT:
+    Clothing    6000
+    Electronics 64000
+    Grocery     800
+
+------------ FILE: com/mapreduce/RevenueByCategory.java ------------
+
+package com.mapreduce;
+
+import java.io.IOException;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.IntWritable;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.Reducer;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+
+public class RevenueByCategory {
+
+    public static class RevMapper extends Mapper<LongWritable, Text, Text, IntWritable> {
+        public void map(LongWritable key, Text value, Context context)
+                throws IOException, InterruptedException {
+            String[] parts = value.toString().trim().split("\\s+");
+            if (parts.length == 5) {
+                // parts: OrderID CustomerID Category Amount City
+                context.write(new Text(parts[2]), new IntWritable(Integer.parseInt(parts[3])));
+            }
+        }
+    }
+
+    public static class RevReducer extends Reducer<Text, IntWritable, Text, IntWritable> {
+        public void reduce(Text key, Iterable<IntWritable> values, Context context)
+                throws IOException, InterruptedException {
+            int total = 0;
+            for (IntWritable val : values) total += val.get();
+            context.write(key, new IntWritable(total));
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        Configuration conf = new Configuration();
+        Job job = Job.getInstance(conf, "revenue by category");
+        job.setJarByClass(RevenueByCategory.class);
+        job.setMapperClass(RevMapper.class);
+        job.setCombinerClass(RevReducer.class);
+        job.setReducerClass(RevReducer.class);
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(IntWritable.class);
+        FileInputFormat.addInputPath(job, new Path(args[0]));
+        FileOutputFormat.setOutputPath(job, new Path(args[1]));
+        System.exit(job.waitForCompletion(true) ? 0 : 1);
+    }
+}
+
+--- 16B: Total Spending per Customer ---
+
+EXPECTED OUTPUT:
+    C01     24800
+    C02     20500
+    C03     25500
+
+------------ FILE: com/mapreduce/CustomerSpend.java ------------
+
+package com.mapreduce;
+
+import java.io.IOException;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.IntWritable;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.Reducer;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+
+public class CustomerSpend {
+
+    public static class SpendMapper extends Mapper<LongWritable, Text, Text, IntWritable> {
+        public void map(LongWritable key, Text value, Context context)
+                throws IOException, InterruptedException {
+            String[] parts = value.toString().trim().split("\\s+");
+            if (parts.length == 5) {
+                context.write(new Text(parts[1]), new IntWritable(Integer.parseInt(parts[3])));
+            }
+        }
+    }
+
+    public static class SpendReducer extends Reducer<Text, IntWritable, Text, IntWritable> {
+        public void reduce(Text key, Iterable<IntWritable> values, Context context)
+                throws IOException, InterruptedException {
+            int total = 0;
+            for (IntWritable val : values) total += val.get();
+            context.write(key, new IntWritable(total));
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        Configuration conf = new Configuration();
+        Job job = Job.getInstance(conf, "customer spend");
+        job.setJarByClass(CustomerSpend.class);
+        job.setMapperClass(SpendMapper.class);
+        job.setCombinerClass(SpendReducer.class);
+        job.setReducerClass(SpendReducer.class);
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(IntWritable.class);
+        FileInputFormat.addInputPath(job, new Path(args[0]));
+        FileOutputFormat.setOutputPath(job, new Path(args[1]));
+        System.exit(job.waitForCompletion(true) ? 0 : 1);
+    }
+}
+
+--- 16C: Revenue by City ---
+
+EXPECTED OUTPUT:
+    Bangalore   25500
+    Delhi       20500
+    Mumbai      24800
+
+------------ FILE: com/mapreduce/RevenueByCity.java ------------
+
+package com.mapreduce;
+
+import java.io.IOException;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.IntWritable;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.Reducer;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+
+public class RevenueByCity {
+
+    public static class CityMapper extends Mapper<LongWritable, Text, Text, IntWritable> {
+        public void map(LongWritable key, Text value, Context context)
+                throws IOException, InterruptedException {
+            String[] parts = value.toString().trim().split("\\s+");
+            if (parts.length == 5) {
+                context.write(new Text(parts[4]), new IntWritable(Integer.parseInt(parts[3])));
+            }
+        }
+    }
+
+    public static class CityReducer extends Reducer<Text, IntWritable, Text, IntWritable> {
+        public void reduce(Text key, Iterable<IntWritable> values, Context context)
+                throws IOException, InterruptedException {
+            int total = 0;
+            for (IntWritable val : values) total += val.get();
+            context.write(key, new IntWritable(total));
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        Configuration conf = new Configuration();
+        Job job = Job.getInstance(conf, "revenue by city");
+        job.setJarByClass(RevenueByCity.class);
+        job.setMapperClass(CityMapper.class);
+        job.setCombinerClass(CityReducer.class);
+        job.setReducerClass(CityReducer.class);
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(IntWritable.class);
+        FileInputFormat.addInputPath(job, new Path(args[0]));
+        FileOutputFormat.setOutputPath(job, new Path(args[1]));
+        System.exit(job.waitForCompletion(true) ? 0 : 1);
+    }
+}
+
+
+================================================================================
+SECTION 21: PROGRAM 17 - LOG FILE ANALYSIS (Real-World Server Logs)
+================================================================================
+
+DATASET (server_log.txt):
+    ERROR 2023-01-01 10:01 NullPointerException
+    INFO  2023-01-01 10:02 Server started
+    ERROR 2023-01-01 10:05 Connection timeout
+    WARN  2023-01-01 10:10 Disk space low
+    ERROR 2023-01-01 10:15 OutOfMemoryError
+    INFO  2023-01-01 10:20 Request processed
+    WARN  2023-01-01 10:25 High CPU usage
+
+EXPECTED OUTPUT:
+    ERROR   3
+    INFO    2
+    WARN    2
+
+------------ FILE: com/mapreduce/LogAnalysis.java ------------
+
+package com.mapreduce;
+
+import java.io.IOException;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.IntWritable;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.Reducer;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+
+public class LogAnalysis {
+
+    public static class LogMapper extends Mapper<LongWritable, Text, Text, IntWritable> {
+        private final static IntWritable one = new IntWritable(1);
+
+        public void map(LongWritable key, Text value, Context context)
+                throws IOException, InterruptedException {
+            String line = value.toString().trim();
+            if (!line.isEmpty()) {
+                String logLevel = line.split("\\s+")[0];
+                context.write(new Text(logLevel), one);
+            }
+        }
+    }
+
+    public static class LogReducer extends Reducer<Text, IntWritable, Text, IntWritable> {
+        public void reduce(Text key, Iterable<IntWritable> values, Context context)
+                throws IOException, InterruptedException {
+            int count = 0;
+            for (IntWritable val : values) count += val.get();
+            context.write(key, new IntWritable(count));
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        Configuration conf = new Configuration();
+        Job job = Job.getInstance(conf, "log analysis");
+        job.setJarByClass(LogAnalysis.class);
+        job.setMapperClass(LogMapper.class);
+        job.setCombinerClass(LogReducer.class);
+        job.setReducerClass(LogReducer.class);
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(IntWritable.class);
+        FileInputFormat.addInputPath(job, new Path(args[0]));
+        FileOutputFormat.setOutputPath(job, new Path(args[1]));
+        System.exit(job.waitForCompletion(true) ? 0 : 1);
+    }
+}
+
+
+================================================================================
+SECTION 22: PROGRAM 18 - CHARACTER COUNT
+================================================================================
+
+------------ FILE: com/mapreduce/CharCount.java ------------
+
+package com.mapreduce;
+
+import java.io.IOException;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.IntWritable;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.Reducer;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+
+public class CharCount {
+
+    public static class CharMapper extends Mapper<LongWritable, Text, Text, IntWritable> {
+        private final static IntWritable one = new IntWritable(1);
+
+        public void map(LongWritable key, Text value, Context context)
+                throws IOException, InterruptedException {
+            for (char c : value.toString().toCharArray()) {
+                if (c != ' ' && c != '\t' && c != '\n') {
+                    context.write(new Text(String.valueOf(c)), one);
+                }
+            }
+        }
+    }
+
+    public static class CharReducer extends Reducer<Text, IntWritable, Text, IntWritable> {
+        public void reduce(Text key, Iterable<IntWritable> values, Context context)
+                throws IOException, InterruptedException {
+            int sum = 0;
+            for (IntWritable val : values) sum += val.get();
+            context.write(key, new IntWritable(sum));
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        Configuration conf = new Configuration();
+        Job job = Job.getInstance(conf, "char count");
+        job.setJarByClass(CharCount.class);
+        job.setMapperClass(CharMapper.class);
+        job.setCombinerClass(CharReducer.class);
+        job.setReducerClass(CharReducer.class);
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(IntWritable.class);
+        FileInputFormat.addInputPath(job, new Path(args[0]));
+        FileOutputFormat.setOutputPath(job, new Path(args[1]));
+        System.exit(job.waitForCompletion(true) ? 0 : 1);
+    }
+}
+
+
+================================================================================
+SECTION 23: RELATIONAL ALGEBRA QUICK REFERENCE
+================================================================================
+
+Operation       Symbol    MapReduce Approach
+---------       ------    ------------------
+Selection       σ         Filter in Mapper using if condition
+Projection      π         Emit only selected parts[] fields in Mapper
+Union           ∪         Map both files → same key → Reducer deduplicates
+Intersection    ∩         Map both files → count occurrences → emit if count >= 2
+Difference      -         Tag source file in Mapper → Reducer emits only tagged-1 rows
+Join (Natural)  ⋈         Tag source in Mapper → Reducer matches and combines
+
+Aggregate Functions (GROUP BY equivalent):
+    COUNT:    Emit 1 per row → sum in reducer
+    SUM:      Emit value per row → sum in reducer
+    AVG:      Emit (value,1) per row → compute sum/count in reducer
+    MAX:      Emit value per row → find max in reducer
+    MIN:      Emit value per row → find min in reducer
+
+
+================================================================================
+SECTION 24: UNIVERSAL BLANK TEMPLATE (Adapt for any dataset in exam)
+================================================================================
+
+package com.mapreduce;
+
+import java.io.IOException;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.IntWritable;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.Text;
+import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.Mapper;
+import org.apache.hadoop.mapreduce.Reducer;
+import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
+import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+
+public class MyProgram {
+
+    public static class MyMapper extends Mapper<LongWritable, Text, Text, IntWritable> {
+        public void map(LongWritable key, Text value, Context context)
+                throws IOException, InterruptedException {
+            String[] parts = value.toString().trim().split("\\s+");
+            if (parts.length < 2) return;            // safety check
+
+            // STEP 1: Choose your KEY (what you want to group by)
+            String myKey = parts[0];                 // Change index as needed
+
+            // STEP 2: Choose your VALUE (what you want to compute on)
+            int myValue = Integer.parseInt(parts[1]); // Change index as needed
+
+            // STEP 3: Apply SELECTION condition (optional - delete if not needed)
+            // if (myValue < 1000) return;
+
+            // STEP 4: Emit
+            context.write(new Text(myKey), new IntWritable(myValue));
+        }
+    }
+
+    public static class MyReducer extends Reducer<Text, IntWritable, Text, IntWritable> {
+        public void reduce(Text key, Iterable<IntWritable> values, Context context)
+                throws IOException, InterruptedException {
+            int result = 0;
+            int count = 0;
+            int max = Integer.MIN_VALUE;
+            int min = Integer.MAX_VALUE;
+
+            for (IntWritable val : values) {
+                int v = val.get();
+                result += v;     // SUM
+                count++;         // COUNT
+                if (v > max) max = v;  // MAX
+                if (v < min) min = v;  // MIN
+            }
+            // double avg = (double) result / count;  // AVG
+
+            // STEP 5: Choose what to emit:
+            context.write(key, new IntWritable(result));   // SUM
+            // context.write(key, new IntWritable(count)); // COUNT
+            // context.write(key, new IntWritable(max));   // MAX
+            // context.write(key, new IntWritable(min));   // MIN
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        Configuration conf = new Configuration();
+        Job job = Job.getInstance(conf, "my program");
+        job.setJarByClass(MyProgram.class);
+        job.setMapperClass(MyMapper.class);
+        job.setCombinerClass(MyReducer.class);
+        job.setReducerClass(MyReducer.class);
+        job.setOutputKeyClass(Text.class);
+        job.setOutputValueClass(IntWritable.class);
+        FileInputFormat.addInputPath(job, new Path(args[0]));
+        FileOutputFormat.setOutputPath(job, new Path(args[1]));
+        System.exit(job.waitForCompletion(true) ? 0 : 1);
+    }
+}
+
+
+================================================================================
+SECTION 25: EXAM QUICK-DECISION TREE
+================================================================================
+
+Given a dataset — ask yourself:
+
+Q1: How many columns does each row have?
+    1 column (words/names)  → Word Count or Union/Intersection
+    2 columns (name+number) → Sum / Count / Avg / Max / Min
+    3+ columns              → Select key column + value column
+
+Q2: What does the question ask?
+    "count occurrences"    → COUNT: emit (key, 1) → sum
+    "total / sum"          → SUM: emit (key, value) → sum
+    "average"              → AVG: emit (key, "val,1") → sum/count
+    "highest / maximum"    → MAX: emit (key, value) → find max
+    "lowest / minimum"     → MIN: emit (key, value) → find min
+    "filter rows"          → SELECTION: add if-condition in mapper
+    "specific columns only"→ PROJECTION: emit only selected parts[]
+    "combine two files"    → UNION (deduplicate) or JOIN (match on key)
+    "common in both"       → INTERSECTION: count >= 2
+    "in one but not other" → SET DIFFERENCE: tag files
+
+Q3: Are there TWO input files?
+    YES → Put both in /input/ → Run with /input as input path
+    NO  → Put single file in /input/filename.txt
+
+
+================================================================================
+SECTION 26: COMMON ERRORS AND FIXES
+================================================================================
+
+ERROR: Output directory already exists
+FIX:   hdfs dfs -rm -r /output
+
+ERROR: Cannot find or load main class
+FIX:   Check package/folder match: com/mapreduce/ClassName.java
+       Recompile: javac -classpath $HADOOP_CLASSPATH -d . com/mapreduce/File.java
+       Re-jar: jar -cvf prog.jar com/
+
+ERROR: NumberFormatException
+FIX:   Add null/length check at top of mapper:
+           if (parts.length < 2) return;
+           String val = parts[1].trim();
+           if (val.isEmpty()) return;
+
+ERROR: HDFS Safe Mode
+FIX:   hdfs dfsadmin -safemode leave
+
+ERROR: Connection refused (Hadoop not running)
+FIX:   stop-all.sh && start-all.sh
+
+ERROR: ClassCastException in reducer
+FIX:   Make sure job.setOutputKeyClass / setOutputValueClass match
+       what your Reducer actually emits
+
+ERROR: Zero output / empty result
+FIX:   Check your condition logic in mapper
+       Verify dataset format matches your split("\\s+") parsing
+       Print parts.length and parts[0] using System.err.println for debug
+
+
+================================================================================
+                     GOOD LUCK FOR YOUR EXAM!
+================================================================================
